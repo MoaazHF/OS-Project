@@ -1,316 +1,239 @@
-"""
-main.py
-Member: Mohy (integration) + all team members
-Responsibility: Application entry point — wires all modules together.
-
-Team:
-    Moaz  -> input_panel.py   (InputPanel)
-    Hazem -> round_robin.py   (run_rr)
-    Hazem -> sjf.py           (run_sjf)
-    Hany  -> gantt_chart.py   (GanttChart, QueueView)
-    Ahmed -> results_table.py (ResultsTable)
-    Mohy  -> comparison.py    (ComparisonPanel, generate_conclusion)
-             main.py          (SchedulerApp — integration)
-"""
-
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from round_robin import run_rr
+from sjf import run_sjf
+from gantt_chart import draw_gantt
+from results_table import fill_results_table
+from comparison import generate_comparison
+import input_panel as inp
 
-# ── Team members' modules ────────────────────────────────────────────────────
-from input_panel   import InputPanel
-from round_robin   import run_rr
-from sjf           import run_sjf
-from gantt_chart   import GanttChart, QueueView
-from results_table import ResultsTable
-from comparison    import ComparisonPanel          # Mohy's module
+# ===================== PREDEFINED TEST SCENARIOS =====================
+SCENARIOS = {
+    "A": {
+        "name": "Scenario A - Basic Mixed",
+        "processes": [
+            {"id": 1, "at": 0, "bt": 5},
+            {"id": 2, "at": 1, "bt": 3},
+            {"id": 3, "at": 2, "bt": 8},
+            {"id": 4, "at": 3, "bt": 6},
+        ],
+        "quantum": 3
+    },
+    "B": {
+        "name": "Scenario B - Short Job Heavy",
+        "processes": [
+            {"id": 1, "at": 0, "bt": 2},
+            {"id": 2, "at": 1, "bt": 1},
+            {"id": 3, "at": 2, "bt": 2},
+            {"id": 4, "at": 3, "bt": 10},
+        ],
+        "quantum": 2
+    },
+    "C": {
+        "name": "Scenario C - Fairness Case",
+        "processes": [
+            {"id": 1, "at": 0, "bt": 4},
+            {"id": 2, "at": 0, "bt": 4},
+            {"id": 3, "at": 0, "bt": 4},
+            {"id": 4, "at": 0, "bt": 4},
+        ],
+        "quantum": 2
+    },
+    "D": {
+        "name": "Scenario D - Long Job Sensitivity",
+        "processes": [
+            {"id": 1, "at": 0, "bt": 12},
+            {"id": 2, "at": 1, "bt": 2},
+            {"id": 3, "at": 2, "bt": 3},
+            {"id": 4, "at": 3, "bt": 2},
+        ],
+        "quantum": 3
+    },
+    "E": {
+        "name": "Scenario E - Validation (invalid)",
+        "processes": [
+            {"id": 1, "at": 0, "bt": 5},
+            {"id": 2, "at": 1, "bt": -3},
+        ],
+        "quantum": 0
+    }
+}
 
-# ── Shared style constants ───────────────────────────────────────────────────
-BG         = "#f0f0f0"
-WHITE      = "#ffffff"
-ACCENT     = "#336699"
-TEXT       = "#111111"
-SUBTEXT    = "#555555"
-FONT       = ("Arial", 10)
-FONT_BOLD  = ("Arial", 10, "bold")
-FONT_TITLE = ("Arial", 13, "bold")
+# ===================== SIMULATION RUNNER =====================
+def run_simulation():
+    """Read inputs, run both algorithms, update all views."""
+    try:
+        quantum = int(quantum_entry.get())
+    except ValueError:
+        status_label.config(text="Error: Quantum must be an integer.")
+        return
+    if quantum <= 0:
+        status_label.config(text="Error: Quantum must be > 0.")
+        return
 
-PROC_COLORS = [
-    "#5b9bd5", "#ed7d31", "#70ad47", "#ffc000", "#cc0000",
-    "#4472c4", "#57a055", "#ff7f7f", "#9dc3e6", "#f4b942",
-    "#7030a0", "#00b0f0", "#c00000", "#92d050", "#ff6600",
-]
+    processes, errors = inp.get_processes_and_validate()
+    if errors:
+        status_label.config(text="Validation failed: " + "; ".join(errors))
+        return
+    if not processes:
+        status_label.config(text="Error: Add at least one process.")
+        return
 
+    rr_results, rr_gantt = run_rr(processes, quantum)
+    sjf_results, sjf_gantt = run_sjf(processes)
 
-# ── Utility helpers ──────────────────────────────────────────────────────────
-def build_color_map(process_list: list) -> dict:
-    """Map each process id to a consistent colour."""
-    return {p["id"]: PROC_COLORS[i % len(PROC_COLORS)]
-            for i, p in enumerate(process_list)}
+    draw_gantt(canvas_rr, rr_gantt, "Round Robin Gantt Chart")
+    draw_gantt(canvas_sjf, sjf_gantt, "SJF Gantt Chart")
+    fill_results_table(rr_tree, rr_results)
+    fill_results_table(sjf_tree, sjf_results)
 
+    # Compute averages
+    def avg(lst, key):
+        return sum(p[key] for p in lst) / len(lst) if lst else 0
 
-def scrollable(parent):
-    """
-    Create a vertically-scrollable frame inside *parent*.
-    Returns (outer_frame, inner_frame).
-    Content should be packed into inner_frame.
-    """
-    outer  = tk.Frame(parent, bg=BG)
-    canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
-    sb     = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-    inner  = tk.Frame(canvas, bg=BG)
+    rr_avg = {'avg_tat': avg(rr_results, 'tat'),
+              'avg_wt': avg(rr_results, 'wt'),
+              'avg_rt': avg(rr_results, 'rt')}
+    sjf_avg = {'avg_tat': avg(sjf_results, 'tat'),
+               'avg_wt': avg(sjf_results, 'wt'),
+               'avg_rt': avg(sjf_results, 'rt')}
 
-    inner.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-    canvas.create_window((0, 0), window=inner, anchor="nw")
-    canvas.configure(yscrollcommand=sb.set)
+    comp_text = generate_comparison(rr_avg, sjf_avg, quantum)
 
-    canvas.pack(side="left", fill="both", expand=True)
-    sb.pack(side="right", fill="y")
+    # Split into comparison summary and conclusion
+    parts = comp_text.split("--- CONCLUSION ---")
+    comparison_display.delete(1.0, tk.END)
+    conclusion_display.delete(1.0, tk.END)
+    if len(parts) == 2:
+        comparison_display.insert(tk.END, parts[0].strip())
+        conclusion_display.insert(tk.END, "--- CONCLUSION ---" + parts[1])
+    else:
+        comparison_display.insert(tk.END, comp_text)
 
-    # Mouse-wheel scrolling
-    canvas.bind_all(
-        "<MouseWheel>",
-        lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-    )
-    return outer, inner
+    ready_list.delete(0, tk.END)
+    for p in sorted(processes, key=lambda x: x['at']):
+        ready_list.insert(tk.END, f"P{p['id']} (AT={p['at']})")
 
+    status_label.config(text="Simulation completed successfully.")
 
-def sep(parent, pad: int = 6):
-    """Draw a thin horizontal separator line."""
-    tk.Frame(parent, height=1, bg="#aaaaaa").pack(fill="x", pady=pad)
+# ===================== BUILD GUI =====================
+root = tk.Tk()
+root.title("OS Scheduler - Round Robin vs SJF")
+root.geometry("1200x900")
 
+main_canvas = tk.Canvas(root, borderwidth=0)
+main_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+scrollbar = tk.Scrollbar(root, orient=tk.VERTICAL, command=main_canvas.yview)
+scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+main_canvas.configure(yscrollcommand=scrollbar.set)
 
-# ════════════════════════════════════════════════════════════════════════════
-#  SchedulerApp  — main application class
-# ════════════════════════════════════════════════════════════════════════════
-class SchedulerApp:
-    """
-    Mohy's integration class.
-    Builds the root window, notebook tabs, and wires all team modules together.
-    """
+main_frame = tk.Frame(main_canvas)
+main_canvas.create_window((0, 0), window=main_frame, anchor="nw")
+def on_frame_configure(event):
+    main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+main_frame.bind("<Configure>", on_frame_configure)
 
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self._configure_window()
-        self._build_header()
-        self._build_notebook()
+title_label = tk.Label(main_frame, text="Round Robin vs Shortest Job First",
+                       font=("Arial", 18, "bold"))
+title_label.pack(pady=10)
 
-    # ── Window setup ────────────────────────────────────────────────────────
-    def _configure_window(self):
-        self.root.title("CPU Scheduling Simulator — RR vs SJF")
-        self.root.geometry("960x680")
-        self.root.minsize(800, 580)
-        self.root.configure(bg=BG)
+# ===================== INPUT PANEL =====================
+input_frame = tk.LabelFrame(main_frame, text="Process Input", padx=10, pady=10)
+input_frame.pack(fill="x", padx=20, pady=5)
 
-        # Notebook tab styling
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TNotebook",        background=BG,     borderwidth=0)
-        style.configure("TNotebook.Tab",    background="#c8d8e8", foreground=TEXT,
-                        font=FONT_BOLD,     padding=(10, 4))
-        style.map("TNotebook.Tab",
-                  background=[("selected", ACCENT)],
-                  foreground=[("selected", WHITE)])
+inp.create_header(input_frame)
 
-    # ── Header banner ────────────────────────────────────────────────────────
-    def _build_header(self):
-        h = tk.Frame(self.root, bg=ACCENT, height=44)
-        h.pack(fill="x")
-        h.pack_propagate(False)
+process_container = tk.Frame(input_frame)
+process_container.grid(row=1, column=0, columnspan=4, sticky="w")
 
-        tk.Label(h, text="CPU Scheduling Simulator",
-                 bg=ACCENT, fg=WHITE,
-                 font=("Arial", 16, "bold")).pack(side="left", padx=16)
-        tk.Label(h,
-                 text="Round Robin  vs  Shortest Job First (Non-Preemptive)",
-                 bg=ACCENT, fg="#c8dff0",
-                 font=("Arial", 11)).pack(side="left")
+btn_frame = tk.Frame(input_frame)
+btn_frame.grid(row=2, column=0, columnspan=4, pady=5)
+tk.Button(btn_frame, text="Add Process",
+          command=lambda: inp.add_process_row(process_container)).pack(side=tk.LEFT, padx=5)
+tk.Button(btn_frame, text="Remove Last",
+          command=inp.remove_process_row).pack(side=tk.LEFT, padx=5)
+tk.Button(btn_frame, text="Clear All",
+          command=inp.clear_all).pack(side=tk.LEFT, padx=5)
 
-    # ── Notebook with 4 tabs ─────────────────────────────────────────────────
-    def _build_notebook(self):
-        nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=10, pady=8)
-        self._nb = nb
+quantum_frame = tk.Frame(input_frame)
+quantum_frame.grid(row=3, column=0, columnspan=4, pady=5)
+tk.Label(quantum_frame, text="Time Quantum:").pack(side=tk.LEFT)
+quantum_entry = tk.Entry(quantum_frame, width=5)
+quantum_entry.pack(side=tk.LEFT, padx=5)
+quantum_entry.insert(0, "3")
 
-        # ── Tab 1: Input (Moaz) ──────────────────────────────────────────────
-        input_tab = tk.Frame(nb, bg=BG)
-        nb.add(input_tab, text="  Input & Setup  ")
+# --- Scenario buttons ---
+scenario_frame = tk.LabelFrame(main_frame, text="Test Scenarios", padx=10, pady=10)
+scenario_frame.pack(fill="x", padx=20, pady=5)
+for key in ["A", "B", "C", "D", "E"]:
+    btn = tk.Button(scenario_frame, text=SCENARIOS[key]["name"],
+                    command=lambda k=key: inp.load_scenario(process_container, SCENARIOS[k], quantum_entry))
+    btn.pack(side=tk.LEFT, padx=5)
 
-        pw = tk.PanedWindow(input_tab, orient="horizontal",
-                            bg=BG, sashwidth=5, relief="flat")
-        pw.pack(fill="both", expand=True, padx=8, pady=8)
+run_btn = tk.Button(main_frame, text="Run Simulation", font=("Arial", 12, "bold"),
+                    command=run_simulation)
+run_btn.pack(pady=10)
 
-        left_frame  = tk.Frame(pw, bg=BG)
-        right_frame = tk.Frame(pw, bg=BG)
-        pw.add(left_frame,  minsize=480)
-        pw.add(right_frame, minsize=260)
+status_label = tk.Label(main_frame, text="Ready", fg="blue")
+status_label.pack()
 
-        # Moaz's InputPanel
-        self._input_panel = InputPanel(left_frame)
-        self._input_panel.pack(fill="both", expand=True)
-        self._input_panel.on_run = self._on_simulation_run   # wire callback
+# ===================== GANTT CHARTS =====================
+gantt_frame = tk.Frame(main_frame)
+gantt_frame.pack(fill="x", padx=20, pady=5)
 
-       # Scenarios
-        info_box = tk.LabelFrame(right_frame, text="Scenarios",
-                                 bg=BG, fg=ACCENT, font=FONT_BOLD,
-                                 padx=8, pady=6)
-        info_box.pack(fill="both", expand=True)
-        tips = (
-            "Scenario A:  Basic mixed workload \n\n"
-            "Scenario B:  Short-job-heavy case \n\n"
-            "Scenario C:  Fairness case\n\n"
-            "Scenario D:  Long-job sensitivity case \n\n"
-            "Scenario E: Validation case\n"
-        )
-        tk.Label(info_box, text=tips, bg=BG, fg=SUBTEXT,
-                 font=FONT, justify="left", anchor="nw").pack(anchor="nw")
+rr_gantt_label = tk.LabelFrame(gantt_frame, text="Round Robin", padx=5, pady=5)
+rr_gantt_label.pack(side=tk.LEFT, fill="both", expand=True)
+canvas_rr = tk.Canvas(rr_gantt_label, height=150, bg="white")
+canvas_rr.pack(fill=tk.BOTH, expand=True)
 
-        # ── Tab 2: Round Robin (Hazem algo + Hany visuals + Ahmed table) ─────
-        rr_tab = tk.Frame(nb, bg=BG)
-        nb.add(rr_tab, text="  Round Robin  ")
-        self._rr_tab = rr_tab
-        self._placeholder(rr_tab, "Run the simulation to see Round Robin results.")
+sjf_gantt_label = tk.LabelFrame(gantt_frame, text="SJF", padx=5, pady=5)
+sjf_gantt_label.pack(side=tk.RIGHT, fill="both", expand=True)
+canvas_sjf = tk.Canvas(sjf_gantt_label, height=150, bg="white")
+canvas_sjf.pack(fill=tk.BOTH, expand=True)
 
-        # ── Tab 3: SJF (Hazem algo + Hany visuals + Ahmed table) ─────────────
-        sjf_tab = tk.Frame(nb, bg=BG)
-        nb.add(sjf_tab, text="  SJF  ")
-        self._sjf_tab = sjf_tab
-        self._placeholder(sjf_tab, "Run the simulation to see SJF results.")
+# ===================== RESULTS TABLES =====================
+tables_frame = tk.Frame(main_frame)
+tables_frame.pack(fill="x", padx=20, pady=5)
 
-        # ── Tab 4: Comparison (Mohy) ─────────────────────────────────────────
-        cmp_tab = tk.Frame(nb, bg=BG)
-        nb.add(cmp_tab, text="  Comparison  ")
-        self._cmp_tab = cmp_tab
-        self._placeholder(cmp_tab, "Run the simulation to see the comparison.")
+columns = ("ID", "AT", "BT", "CT", "TAT", "WT", "RT")
 
-    def _placeholder(self, tab: tk.Frame, msg: str):
-        tk.Label(tab, text=msg, bg=BG, fg=SUBTEXT, font=FONT).pack(pady=40)
+rr_table_frame = tk.LabelFrame(tables_frame, text="Round Robin Results", padx=5, pady=5)
+rr_table_frame.pack(side=tk.LEFT, fill="both", expand=True)
+rr_tree = ttk.Treeview(rr_table_frame, columns=columns, show="headings", height=6)
+for col in columns:
+    rr_tree.heading(col, text=col)
+    rr_tree.column(col, width=50)
+rr_tree.pack(fill=tk.BOTH, expand=True)
 
-    # ── Simulation callback ──────────────────────────────────────────────────
-    def _on_simulation_run(self, processes: list, tq: int):
-        """
-        Connected to Moaz's InputPanel.on_run.
-        Drives all team modules in sequence and refreshes every tab.
-        """
-        try:
-            color_map = build_color_map(processes)
+sjf_table_frame = tk.LabelFrame(tables_frame, text="SJF Results", padx=5, pady=5)
+sjf_table_frame.pack(side=tk.RIGHT, fill="both", expand=True)
+sjf_tree = ttk.Treeview(sjf_table_frame, columns=columns, show="headings", height=6)
+for col in columns:
+    sjf_tree.heading(col, text=col)
+    sjf_tree.column(col, width=50)
+sjf_tree.pack(fill=tk.BOTH, expand=True)
 
-            # Hazem: run both algorithms
-            rr_results, rr_gantt, rr_queue_log = run_rr(processes, tq)
-            sjf_results, sjf_gantt             = run_sjf(processes)
+# ===================== READY QUEUE VIEW =====================
+ready_frame = tk.LabelFrame(main_frame, text="Ready Queue (Arrival Order)", padx=5, pady=5)
+ready_frame.pack(fill="x", padx=20, pady=5)
+ready_list = tk.Listbox(ready_frame, height=3)
+ready_list.pack(fill="x")
 
-            # Render each tab
-            self._render_rr_tab(rr_results, rr_gantt, rr_queue_log,
-                                color_map, tq)
-            self._render_sjf_tab(sjf_results, sjf_gantt, color_map)
-            self._render_comparison_tab(rr_results, sjf_results, tq)
+# ===================== COMPARISON & CONCLUSION =====================
+comp_frame = tk.LabelFrame(main_frame, text="Comparison Summary", padx=5, pady=5)
+comp_frame.pack(fill="x", padx=20, pady=5)
+comparison_display = tk.Text(comp_frame, height=12, wrap=tk.WORD)
+comparison_display.pack(fill="x")
 
-            # Jump to Round Robin tab after a successful run
-            self._nb.select(1)
+conc_frame = tk.LabelFrame(main_frame, text="Conclusion", padx=5, pady=5)
+conc_frame.pack(fill="x", padx=20, pady=5)
+conclusion_display = tk.Text(conc_frame, height=10, wrap=tk.WORD)
+conclusion_display.pack(fill="x")
 
-        except Exception as exc:
-            messagebox.showerror(
-                "Simulation Error",
-                f"An unexpected error occurred:\n\n{exc}"
-            )
+# ===================== INITIAL SETUP =====================
+for _ in range(4):
+    inp.add_process_row(process_container)
 
-    # ── Render: Round Robin tab ──────────────────────────────────────────────
-    def _render_rr_tab(self, results, gantt, queue_log, color_map, tq):
-        for w in self._rr_tab.winfo_children():
-            w.destroy()
-
-        outer, inner = scrollable(self._rr_tab)
-        outer.pack(fill="both", expand=True)
-        inner.configure(padx=12, pady=8)
-
-        tk.Label(inner, text="Round Robin — Simulation Results",
-                 font=FONT_TITLE, bg=BG, fg=ACCENT).pack(anchor="w")
-        tk.Label(inner, text=f"Time Quantum (Q) = {tq}",
-                 font=FONT, bg=BG, fg=SUBTEXT).pack(anchor="w", pady=(0, 8))
-
-        # Hany: ready-queue view
-        qv = QueueView(inner)
-        qv.pack(fill="x", pady=(0, 8))
-        qv.update(queue_log)
-
-        sep(inner)
-
-        # Hany: Gantt chart
-        total = gantt[-1][2] if gantt else 1
-        gc = GanttChart(inner, title="Gantt Chart — Round Robin")
-        gc.pack(fill="x", pady=(0, 8))
-        gc.redraw(gantt, total, color_map)
-
-        sep(inner)
-
-        # Ahmed: results table
-        rt = ResultsTable(inner, title="Per-Process Metrics — Round Robin")
-        rt.pack(fill="x", pady=(0, 8))
-        rt.update(results)
-
-    # ── Render: SJF tab ─────────────────────────────────────────────────────
-    def _render_sjf_tab(self, results, gantt, color_map):
-        for w in self._sjf_tab.winfo_children():
-            w.destroy()
-
-        outer, inner = scrollable(self._sjf_tab)
-        outer.pack(fill="both", expand=True)
-        inner.configure(padx=12, pady=8)
-
-        tk.Label(inner, text="SJF — Simulation Results (Non-Preemptive)",
-                 font=FONT_TITLE, bg=BG, fg=ACCENT).pack(anchor="w", pady=(0, 8))
-
-        # Hany: Gantt chart
-        total = gantt[-1][2] if gantt else 1
-        gc = GanttChart(inner, title="Gantt Chart — SJF")
-        gc.pack(fill="x", pady=(0, 8))
-        gc.redraw(gantt, total, color_map)
-
-        sep(inner)
-
-        # Ahmed: results table
-        rt = ResultsTable(inner, title="Per-Process Metrics — SJF")
-        rt.pack(fill="x", pady=(0, 8))
-        rt.update(results)
-
-    # ── Render: Comparison tab (Mohy's ComparisonPanel) ─────────────────────
-    def _render_comparison_tab(self, rr_results, sjf_results, tq):
-        for w in self._cmp_tab.winfo_children():
-            w.destroy()
-
-        outer, inner = scrollable(self._cmp_tab)
-        outer.pack(fill="both", expand=True)
-        inner.configure(padx=12, pady=8)
-
-        tk.Label(inner, text="Algorithm Comparison",
-                 font=FONT_TITLE, bg=BG, fg=ACCENT).pack(anchor="w", pady=(0, 8))
-
-        # Ahmed's ResultsTable provides get_averages() — reuse for averages only
-        rr_table  = ResultsTable(inner, title="Round Robin — Full Results")
-        rr_table.pack(fill="x", pady=(0, 6))
-        rr_table.update(rr_results)
-
-        sjf_table = ResultsTable(inner, title="SJF — Full Results")
-        sjf_table.pack(fill="x", pady=(0, 6))
-        sjf_table.update(sjf_results)
-
-        sep(inner, 8)
-
-        rr_avgs  = rr_table.get_averages()
-        sjf_avgs = sjf_table.get_averages()
-
-        # Mohy: ComparisonPanel — colour-coded table + conclusion
-        cmp_panel = ComparisonPanel(inner)
-        cmp_panel.pack(fill="both", expand=True, pady=(0, 12))
-        cmp_panel.update(rr_avgs, sjf_avgs, tq)
-
-
-# ════════════════════════════════════════════════════════════════════════════
-#  ENTRY POINT
-# ════════════════════════════════════════════════════════════════════════════
-if __name__ == "__main__":
-    root = tk.Tk()
-    SchedulerApp(root)
-    root.mainloop()
+main_frame.update_idletasks()
+main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+root.mainloop()
